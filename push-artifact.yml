@@ -1,0 +1,65 @@
+---
+- name: Push Java artifact to Nexus
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    nexus_url: "http://172.236.20.9:8081"
+    nexus_repo: "maven-releases"
+    nexus_username: "admin"
+    #nexus_password comes from vault.yml  --ask-vault-pass \ --extra-vars "@vault.yml"
+    group_id: "com.example"
+    # at runtime: -e "jar_file=./my-app.jar" -e "artifact_id=my-app" -e "version=1.0.0"
+  
+
+  tasks:
+      - name: Fail if required variables are not set
+        fail:
+          msg: "Please provide jar_file, artifact_id and version via -e"
+        when: jar_file is not defined or artifact_id is not defined or version is not defined
+
+      - name: Check that the JAR file exists
+        stat:
+          path: "{{ jar_file }}"
+        register: jar_stat
+
+      - name: Fail if JAR file not found
+        fail:
+          msg: "JAR file not found: {{ jar_file }}"
+        when: not jar_stat.stat.exists
+
+      - name: Upload JAR to Nexus
+        uri:
+          url: "{{ nexus_url }}/service/rest/v1/components?repository={{ nexus_repo }}"
+          method: POST
+          user: "{{ nexus_username }}"
+          password: "{{ nexus_password }}"
+          force_basic_auth: true
+          body_format: form-multipart
+          body:
+            maven2.groupId: "{{ group_id }}"
+            maven2.artifactId: "{{ artifact_id }}"
+            maven2.version: "{{ version }}"
+            maven2.asset1: "{{ jar_file }}"
+            maven2.asset1.extension: "jar"
+          status_code: 204
+        register: upload_result
+
+      - name: Search for uploaded artifact in Nexus
+        uri:
+          url: "{{ nexus_url }}/service/rest/v1/search?repository={{ nexus_repo }}&name={{ artifact_id }}&version={{ version }}"
+          method: GET
+          user: "{{ nexus_username }}"
+          password: "{{ nexus_password }}"
+          force_basic_auth: true
+          status_code: 200
+        register: search_result
+      
+      - name: Fail if artifact not found in Nexus
+        fail:
+          msg: "Artifact was not found in Nexus after upload!"
+        when: search_result.json['items'] | length == 0
+
+      - name: Print artifact download URL
+        debug:
+          msg: "Artifact available at: {{ search_result.json['items'][0]['assets'][0]['downloadUrl'] }}"
